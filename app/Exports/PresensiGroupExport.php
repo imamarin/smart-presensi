@@ -23,100 +23,108 @@ class PresensiGroupExport implements FromCollection, WithColumnFormatting, WithH
 {
     protected $groupId;
     protected $groupName;
+    protected $date1;
+    protected $date2;
 
-    public function __construct($groupId, $groupName)
+    public function __construct($groupId, $groupName, $date1, $date2)
     {
         $this->groupId = $groupId;
         $this->groupName = $groupName;
+        $this->date1 = $date1;
+        $this->date2 = $date2;
     }
 
     public function collection()
     {
         $group = Group::find($this->groupId);
 
-        if(!$group){
+        if (!$group) {
             return response()->json('Group not found', 404);
         }
 
+        // Tentukan range waktu dari tanggal input
+        $startDate = Carbon::parse($this->date1)->startOfDay();
+        $endDate   = Carbon::parse($this->date2)->endOfDay();
 
-        $presensi = Presensi::with('participant', 'shift')
-        ->whereHas('participant.groupParticipants.group', function($query) use ($group) {
-            $query->where('id_group', $group->id);
-        })
-        ->whereHas('shift', function($query) {
-            $query->whereColumn('tanggal_mulai', '<=', 'presensis.waktu_masuk');
-        })
-        ->get();
+        // Ambil semua presensi dalam periode untuk grup terkait
+        $presensi = Presensi::with(['participant'])
+            ->whereHas('participant.groupParticipants.group', function($query) use ($group) {
+                $query->where('id_group', $group->id);
+            })
+            ->whereBetween('waktu_masuk', [$startDate, $endDate])
+            ->get();
 
-        $shift = $presensi->pluck('shift.tanggal_mulai');
-        $today = Carbon::today();
-        $totalHari = $shift->map(function ($date) use($today) {
-            $tanggalMulai = Carbon::parse($date);
-            $totalDay = 0;
-
-             // Buat periode tanggal dari mulai sampai hari ini
-            $periode = CarbonPeriod::create($tanggalMulai, $today);
-
-            foreach ($periode as $day) {
-                // Cek apakah bukan hari Minggu
-                if (!$day->isSunday()) {
-                    $totalDay++;
-                }
+        // Hitung total hari kerja dalam range tanggal (tidak termasuk Minggu)
+        $totalHari = 0;
+        $periode = CarbonPeriod::create($startDate, $endDate);
+        foreach ($periode as $day) {
+            if (!$day->isSunday()) {
+                $totalHari++;
             }
-            return $totalDay;
-        });
-        $totalLibur = 0;
-        $WaktuLiburGroup = WaktuLibur::whereHas('groupLibur', function ($query) use($group) {
-            $query->where('id_group', $group->id);
-        })->get();
-        // return response()->json($WaktuLiburGroup);
-
-        foreach ($WaktuLiburGroup as $waktuLibur) {
-            $tanggalMulai = Carbon::parse($waktuLibur->tanggal_mulai);
-            $tanggalAkhir = Carbon::parse($waktuLibur->tanggal_akhir);
-
-            $diffDays = $tanggalMulai->diffInDays($tanggalAkhir) + 1;
-            $totalLibur += $diffDays;
         }
 
+        // Ambil tanggal libur yang berkaitan dengan grup dalam periode ini
+        $totalLibur = 0;
+        $WaktuLiburGroup = WaktuLibur::whereHas('groupLibur', function ($query) use ($group) {
+                $query->where('id_group', $group->id);
+            })
+            ->where(function($query) use ($startDate, $endDate) {
+                // hanya libur yang bersinggungan dengan range tanggal
+                $query->whereBetween('tanggal_mulai', [$startDate, $endDate])
+                    ->orWhereBetween('tanggal_akhir', [$startDate, $endDate])
+                    ->orWhere(function ($q) use ($startDate, $endDate) {
+                        $q->where('tanggal_mulai', '<=', $startDate)
+                            ->where('tanggal_akhir', '>=', $endDate);
+                    });
+            })
+            ->get();
 
-        $presensi_participants = (object) $presensi->pluck('participant')->unique('id');
-        // dd($presensi_participants);
-        $dataPresensi = $presensi_participants->map(function($data, $index) use($totalHari, $presensi, $totalLibur) {
-            $totalMasuk = $presensi->where('id_participant', $data->id)->count();
-            $totalTelat = $presensi->where('id_participant', $data->id)->where('status_terlambat', true)->count();
-            $totalTidakCO = $presensi->where('id_participant', $data->id)->where('status_check_out', false)->count();
-            $JamKerja = $presensi->where('id_participant', $data->id)->map(function($dataPresensi) {
-                $waktuMasuk = $dataPresensi->waktu_masuk;
-                $waktuKeluar = $dataPresensi->waktu_keluar;
-                return [
-                    'waktu_masuk' => $waktuMasuk,
-                    'waktu_keluar' => $waktuKeluar
-                ];
-            });
-            $totalJamKerja = 0;
-            foreach($JamKerja as $jam) {
-                $jamMasuk = Carbon::parse($jam['waktu_masuk']);
-                $jamKeluar = Carbon::parse($jam['waktu_keluar']);
+        // Hitung total hari libur dalam periode
+        foreach ($WaktuLiburGroup as $libur) {
+            $mulai = Carbon::parse($libur->tanggal_mulai);
+            $akhir = Carbon::parse($libur->tanggal_akhir);
 
-                $diffMinutes = $jamMasuk->diffInMinutes($jamKeluar) / 60;
-
-                $totalJamKerja += $diffMinutes;
+            $periodeLibur = CarbonPeriod::create($mulai, $akhir);
+            foreach ($periodeLibur as $hari) {
+                if ($hari->between($startDate, $endDate) && !$hari->isSunday()) {
+                    $totalLibur++;
+                }
             }
+        }
 
+        // Ambil daftar peserta unik yang memiliki presensi
+        $participants = $presensi->pluck('participant')->unique('id')->values();
+
+        // Hitung rekap per peserta
+        $dataPresensi = $participants->map(function ($participant) use ($presensi, $totalHari, $totalLibur) {
+            $presensiPeserta = $presensi->where('id_participant', $participant->id);
+
+            $totalMasuk = $presensiPeserta->count();
+            $totalTelat = $presensiPeserta->where('status_terlambat', true)->count();
+            $totalTidakCO = $presensiPeserta->where('status_check_out', false)->count();
+
+            // Hitung total jam kerja (jam_keluar - jam_masuk)
+            $totalJamKerja = $presensiPeserta->sum(function ($item) {
+                if ($item->waktu_keluar && $item->waktu_masuk) {
+                    return Carbon::parse($item->waktu_masuk)->diffInHours(Carbon::parse($item->waktu_keluar));
+                }
+                return 0;
+            });
 
             return [
-                "participant" => $data->nama,
-                "TotalHari" => $totalHari[$index],
+                "nip" => $participant->no_induk,
+                "participant" => $participant->nama,
+                "totalHariKerja" => $totalHari,
                 "totalLibur" => $totalLibur,
                 "totalJamKerja" => $totalJamKerja,
-                "TotalMasuk" => $totalMasuk,
+                "totalMasuk" => $totalMasuk,
                 "totalTelat" => $totalTelat,
-                "totalTidakMasuk" => $totalHari[$index] - $totalMasuk - $totalLibur,
+                "totalTidakMasuk" => max(0, $totalHari - $totalLibur - $totalMasuk),
                 "totalTidakCheckOut" => $totalTidakCO,
             ];
-        })->values();
+        });
 
+        // Kembalikan hasil dalam bentuk Collection
         return new Collection($dataPresensi);
     }
 
@@ -125,20 +133,21 @@ class PresensiGroupExport implements FromCollection, WithColumnFormatting, WithH
         return [
             ['Recap Presensi Grup ' . $this->groupName], // Judul
             [], // baris kosong setelah judul
-            ['Nama Peserta', 'Total Hari', 'Total Libur', 'Total Jam Kerja', 'Total Masuk', 'Total Terlambat', 'Total Tidak Masuk', 'Total Tidak Check-Out']
+            ['NIP','Nama Peserta', 'Total Hari', 'Total Libur', 'Total Jam Kerja', 'Total Masuk', 'Total Terlambat', 'Total Tidak Masuk', 'Total Tidak Check-Out']
         ];
     }
 
     public function columnFormats(): array
     {
         return [
-            'B' => NumberFormat::FORMAT_NUMBER,
+            'A' => NumberFormat::FORMAT_NUMBER,
             'C' => NumberFormat::FORMAT_NUMBER,
             'D' => NumberFormat::FORMAT_NUMBER,
             'E' => NumberFormat::FORMAT_NUMBER,
             'F' => NumberFormat::FORMAT_NUMBER,
             'G' => NumberFormat::FORMAT_NUMBER,
             'H' => NumberFormat::FORMAT_NUMBER,
+            'I' => NumberFormat::FORMAT_NUMBER,
         ];
     }
 
@@ -166,6 +175,7 @@ class PresensiGroupExport implements FromCollection, WithColumnFormatting, WithH
             'F' => 20,
             'G' => 20,
             'H' => 20,
+            'I' => 20,
         ];
     }
 
@@ -174,11 +184,11 @@ class PresensiGroupExport implements FromCollection, WithColumnFormatting, WithH
         return [
             AfterSheet::class => function (AfterSheet $event) {
                 // Merge untuk judul
-                $event->sheet->mergeCells('A1:H1');
+                $event->sheet->mergeCells('A1:I1');
 
                 // Border semua data mulai dari baris ke-4 (data dimulai dari row 4)
                 $highestRow = $event->sheet->getHighestRow();
-                $event->sheet->getStyle("A3:H$highestRow")->applyFromArray([
+                $event->sheet->getStyle("A3:I$highestRow")->applyFromArray([
                     'borders' => [
                         'allBorders' => [
                             'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
@@ -191,7 +201,7 @@ class PresensiGroupExport implements FromCollection, WithColumnFormatting, WithH
                 ]);
 
                 // Styling header background
-                $event->sheet->getStyle("A3:H3")->applyFromArray([
+                $event->sheet->getStyle("A3:I3")->applyFromArray([
                     'fill' => [
                         'fillType' => 'solid',
                         'startColor' => [

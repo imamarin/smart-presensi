@@ -19,18 +19,24 @@
     </form>
         <div>
             <a href="{{ route('export.participant.group', Crypt::encrypt($group->id)) }}">
+                
                 <button class="btn btn-primary w-100 my-3">
                     <i class="ti ti-file-spreadsheet me-1"></i> Export Group Participant
                 </button>
             </a>
         </div>
         <div>
-            <a href="{{ route('export.presensi.group', Crypt::encrypt($group->id)) }}">
+            <button type="button" class="btn btn-success w-100 mb-2" data-bs-toggle="modal" data-bs-target="#exportModal">
+                <i class="ti ti-file-spreadsheet me-1"></i> Export Recap Presensi Participant
+            </button>
+        </div>
+        <!-- <div>
+            <a href="{{ route('export.presensi.group', ['id' => Crypt::encrypt($group->id), 'date1' => date('Y-m-d'), 'date2' => date('Y-m-d')]) }}">
                 <button class="btn btn-success w-100 mb-2">
                     <i class="ti ti-file-spreadsheet me-1"></i> Export Recap Presensi Participant
                 </button>
             </a>
-        </div>
+        </div> -->
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
         <div>
             <h3 class="fw-semibold mb-1">Group Participant</h3>
@@ -187,4 +193,55 @@
         </div>
     @endif
 </div>
+
+<!-- Modal Export Presensi -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="exportModalLabel">Pilih Rentang Tanggal</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="exportForm">
+          <div class="mb-3">
+            <label for="startDate" class="form-label">Start Date</label>
+            <input type="date" id="startDate" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label for="endDate" class="form-label">End Date</label>
+            <input type="date" id="endDate" class="form-control" required>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-primary" id="btnExport">Export</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+document.getElementById('btnExport').addEventListener('click', function () {
+    const start = document.getElementById('startDate').value;
+    const end = document.getElementById('endDate').value;
+
+    if (!start || !end) {
+        alert('Silakan isi tanggal mulai dan tanggal akhir.');
+        return;
+    }
+
+    // Buat URL dari route Laravel
+    const groupId = "{{ Crypt::encrypt($group->id) }}";
+    const url = `{{ route('export.presensi.group', ['id' => ':id', 'date1' => ':date1', 'date2' => ':date2']) }}`;
+    const finalUrl = url
+        .replace(':id', groupId)
+        .replace(':date1', start)
+        .replace(':date2', end);
+
+    // Redirect ke URL export
+    window.location.href = finalUrl;
+});
+</script>
+
 @endsection

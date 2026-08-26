@@ -294,11 +294,16 @@ class PresensiController extends Controller
                         continue;
                     }
 
-                    $participant->presensi()->update([
-                        'waktu_keluar' => $currentTime,
-                        'status_check_out' => true,
-                        'updated_at' => $currentTime, // Set to current time for check-out
-                    ]);
+                    $existingAttendance->waktu_keluar = $currentTime;
+                    $existingAttendance->status_check_out = true;
+                    $existingAttendance->updated_at = $currentTime;
+                    $existingAttendance->save();
+                    
+                    // $participant->presensi()->update([
+                    //     'waktu_keluar' => $currentTime,
+                    //     'status_check_out' => true,
+                    //     'updated_at' => $currentTime, // Set to current time for check-out
+                    // ])->whereDate('waktu_masuk', Carbon::today()) ;
 
                     // simpan hasilnya, tapi tidak hentikan proses batch
                     $results[] = [
@@ -381,6 +386,219 @@ class PresensiController extends Controller
                 }
             }
         }
+        return response()->json(['message' => 'Fingerprint received', $results, 'status_code' => 200]);
+    }
+
+    public function reStoreFp(Request $request)
+    {
+
+        $device = Device::where('device_id', $request->id_device)->first();
+        if(!$device || $device->api_key != $request->api_key) {
+            return response()->json(['message' => 'Device not found']);
+        }
+
+        if($device->status === 'inactive') {
+            return response()->json(['message' => 'Device is inactive, please call admin to fix it']);
+        }
+        
+        // $sortedData = collect($request->data)
+        // ->sortBy('timestamp')
+        // ->values(); // reset index
+        // return response()->json($request->data);
+        $results = [];
+        foreach ($request->data as $key => $value) {
+
+            # code...
+            $waktuScan = date('Y-m-d H:i:s', strtotime($value['timestamp']));
+            $todayDate = date('Y-m-d', strtotime($waktuScan));
+            $participant = Participant::where('id_fingerprint', $value['user_id'])->with('jadwalParticipant', 'groupParticipants')->first();
+
+            if ($participant) {
+                // Get the current time and day
+                Carbon::setLocale('id');
+                $currentTime = Carbon::parse($waktuScan);
+                $currentDate = $currentTime->translatedFormat(format: 'Y-m-d');
+                $currentDay = strtolower($currentTime->translatedFormat('l')); // This will return the day in Bahasa
+                $currentHour = $currentTime->translatedFormat(format: 'H:i:s');
+
+                $isLibur = false;
+                $namaLibur = null;
+
+                $groupParticipants = $participant->groupParticipants;
+                foreach ($groupParticipants as $data) {
+                    $group = Group::with('groupLiburs')->find($data->id_group);
+
+                    foreach ($group->groupLiburs as $dataLibur) {
+                        $waktuLibur = WaktuLibur::find($dataLibur->id_waktu_libur);
+
+                        if ($currentDate >= $waktuLibur->tanggal_mulai && $currentDate <= $waktuLibur->tanggal_akhir) {
+                            $isLibur = true;
+                            $namaLibur = $waktuLibur->nama_libur;
+                            break 2; // langsung keluar dari 2 level loop
+                        }
+                    }
+                }
+
+                if ($isLibur) {
+                    // simpan hasilnya, tapi tidak hentikan proses batch
+                    $results[] = [
+                        'user_id' => $participant->id_fingerprint,
+                        'participant' => $participant->nama,
+                        'message' => 'Hari ini adalah hari libur: ' . $namaLibur . ', tidak bisa presensi'
+                    ];
+                    continue; // lanjut ke peserta berikutnya
+                }
+
+
+                $jadwalParticipant = $participant['jadwalParticipant'];
+                if (!$jadwalParticipant) {
+                    // simpan hasilnya, tapi tidak hentikan proses batch
+                    $results[] = [
+                        'user_id' => $participant->id_fingerprint,
+                        'participant' => $participant->nama,
+                        'message' => 'Jadwal Participant not found'
+                    ];
+                    continue; // lanjut ke peserta berikutnya
+                }
+
+                $shift = $jadwalParticipant->shift;
+                if (!$shift) {
+                    // simpan hasilnya, tapi tidak hentikan proses batch
+                    $results[] = [
+                        'user_id' => $participant->id_fingerprint,
+                        'participant' => $participant->nama,
+                        'message' => 'Shift not found'
+                    ];
+                    continue; // lanjut ke peserta berikutnya
+                }
+
+                $jamKerja = $shift->jamKerja;
+                if (!$jamKerja) {
+                     $results[] = [
+                        'user_id' => $participant->id_fingerprint,
+                        'participant' => $participant->nama,
+                        'message' => 'Jam Kerja not found'
+                    ];
+                    continue; // lanjut ke peserta berikutnya
+                }
+
+
+
+                // Check if the participant has already checked in today
+                $existingAttendance = $participant->presensi()
+                    ->whereDate('created_at', $currentDate)
+                    ->first();
+                // return response()->json($currentHour);
+                if ($existingAttendance != null) {
+
+                    if($currentHour < $jamKerja->jam_mulai_scan_keluar) {
+                         $results[] = [
+                            'user_id' => $participant->id_fingerprint,
+                            'participant' => $participant->nama,
+                            'message' => 'Belum masuk jam scan keluar'
+                        ];
+                        continue;
+                    }
+
+                    $existingAttendance->waktu_keluar = $currentTime;
+                    $existingAttendance->status_check_out = true;
+                    $existingAttendance->updated_at = $currentTime;
+                    $existingAttendance->save();
+
+
+                    // $participant->presensi()->update([
+                    //     'waktu_keluar' => $currentTime,
+                    //     'status_check_out' => true,
+                    //     'updated_at' => $currentTime, // Set to current time for check-out
+                    // ])->whereDate('created_at', $currentDate) ;
+
+                    // simpan hasilnya, tapi tidak hentikan proses batch
+                    $results[] = [
+                        'user_id' => $participant->id_fingerprint,
+                        'participant' => $participant->nama,
+                        'message' => [
+                            'message' => 'Presensi Check Out Hari Ini',
+                            'waktu_keluar' => $currentHour,
+                            'participant' => $participant->nama,
+                            'shift' => $jadwalParticipant->shift->nama,
+                            'updated_at' => $currentTime
+                        ]
+                    ];
+
+                    continue; // lanjut ke peserta berikutnya
+
+                }else{
+                    // Check if the current day is in the jadwalParticipant
+                    $isDayInJadwal = $jadwalParticipant->shift->detailShifts->contains(function ($detailShift) use ($currentDay) {
+                        return strtolower($detailShift->hari) == $currentDay;
+                    });
+
+                    if (!$isDayInJadwal) {
+                        $results[] = [
+                            'user_id' => $participant->id_fingerprint,
+                            'participant' => $participant->nama,
+                            'message' => 'Tidak ada jadwal untuk hari ini '.$currentDay
+                        ];
+                        continue; 
+                    }
+
+                    if($currentHour < $jamKerja->jam_mulai_scan_masuk) {
+                        $results[] = [
+                            'user_id' => $participant->id_fingerprint,
+                            'participant' => $participant->nama,
+                            'message' => 'Tidak dalam jam scan'
+                        ];
+                        continue;
+                    }
+
+                    $toleransiMasuk = Carbon::parse($jamKerja->jam_masuk)->addMinutes($jamKerja->toleransi_terlambat)->translatedFormat('H:i:s');
+                    $jamMasuk = Carbon::parse($todayDate . ' ' . $jamKerja->jam_masuk);
+
+                    if ($currentHour > $toleransiMasuk){
+                        $participant->presensi()->create([
+                            'id_participant' => $participant->id,
+                            'waktu_masuk' => $currentTime,
+                            'waktu_keluar' => $jamMasuk->addHours($jamKerja->toleransi_check_out),
+                            'id_device' => $device->id,
+                            'id_shift' => $jadwalParticipant->shift->id,
+                            'status_terlambat' => true,
+                            'status_check_out' => false,
+                            'created_at' => $waktuScan,
+                            'updated_at' => $waktuScan,
+                        ]);
+                    } else {
+                        $participant->presensi()->create([
+                            'id_participant' => $participant->id,
+                            'waktu_masuk' => $currentTime,
+                            'waktu_keluar' => $jamMasuk->addHours($jamKerja->toleransi_check_out),
+                            'id_device' => $device->id,
+                            'id_shift' => $jadwalParticipant->shift->id,
+                            'status_terlambat' => false,
+                            'status_check_out' => false,
+                            'created_at' => $waktuScan,
+                            'updated_at' => $waktuScan,
+                        ]);
+                    }
+
+                    // simpan hasilnya, tapi tidak hentikan proses batch
+                    $results[] = [
+                        'user_id' => $participant->id_fingerprint,
+                        'participant' => $participant->nama,
+                        'message' => [
+                            'message' => 'Presensi Presensi Hari Ini '.$toleransiMasuk,
+                            'waktu_keluar' => $currentHour,
+                            'participant' => $participant->nama,
+                            'shift' => $jadwalParticipant->shift->nama,
+                            'updated_at' => $currentTime
+                        ]
+                    ];
+
+                    continue; // lanjut ke peserta berikutnya
+
+                }
+            }
+        }
+        
         return response()->json(['message' => 'Fingerprint received', $results, 'status_code' => 200]);
     }
 
@@ -502,7 +720,7 @@ class PresensiController extends Controller
         return response()->json($dataPresensi);
     }
 
-    public function presensiExport($id)
+    public function presensiExport($id, $date1, $date2)
     {
         $groupId = Crypt::decrypt($id);
         $group = Group::find($groupId);
@@ -511,7 +729,7 @@ class PresensiController extends Controller
             return response()->json(['message' => 'Group not found'], 404);
         }
 
-        return Excel::download(new PresensiGroupExport($group->id, $group->nama), 'report_presensi_group_' . $group->nama . '.xlsx');
+        return Excel::download(new PresensiGroupExport($group->id, $group->nama, $date1, $date2), 'report_presensi_group_' . $group->nama . '.xlsx');
     }
     public function ping($api_key, $id_device)
     {

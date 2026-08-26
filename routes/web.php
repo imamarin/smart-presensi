@@ -61,7 +61,7 @@ Route::middleware(['auth', 'checkRole:admin,operator'])->group(function () {
 
     Route::get('/export-participant', [ParticipantsController::class, 'exportAll'])->name('export.participant');
     Route::get('/export-participant/{id}', [ParticipantsController::class, 'exportByGroup'])->name('export.participant.group');
-    Route::get('/export-report-presensi/{id}', [PresensiController::class, 'presensiExport'])->name('export.presensi.group');
+    Route::get('/export-report-presensi/{id}/{date1}/{date2}', [PresensiController::class, 'presensiExport'])->name('export.presensi.group');
 
     Route::get('/test/{id}', [PresensiController::class, 'test']);
 });
