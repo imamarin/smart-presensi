@@ -13,6 +13,7 @@ use App\Http\Controllers\ShiftController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WaktuLiburController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ReportController;
 use Illuminate\Support\Facades\Route;
 
 // Auth routes (tanpa middleware)
@@ -62,6 +63,9 @@ Route::middleware(['auth', 'checkRole:admin,operator'])->group(function () {
     Route::get('/export-participant', [ParticipantsController::class, 'exportAll'])->name('export.participant');
     Route::get('/export-participant/{id}', [ParticipantsController::class, 'exportByGroup'])->name('export.participant.group');
     Route::get('/export-report-presensi/{id}/{date1}/{date2}', [PresensiController::class, 'presensiExport'])->name('export.presensi.group');
+
+    Route::get('/laporan', [ReportController::class, 'index'])->name('laporan.index');
+    Route::get('/laporan/export', [ReportController::class, 'export'])->name('laporan.export');
 
     Route::get('/test/{id}', [PresensiController::class, 'test']);
 });
